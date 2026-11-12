@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebM 分割ツール</title>
+    <!-- PWAマニフェスト -->
+    <link rel="manifest" href="manifest.json">
+    <!-- FFmpeg.wasm for video processing -->
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+    <script>
+      // Service Workerの登録
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('sw.js')
+            .then(reg => console.log('ServiceWorker 登録成功', reg.scope))
+            .catch(err => console.log('ServiceWorker 登録失敗', err));
+        });
+      }
+    </script>
+    <style>
+        /* Base Styles */
+        :root {
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --bg-color: #f9fafb;
+            --card-bg: #ffffff;
+            --text-main: #1f2937;
+            --text-muted: #6b7280;
+            --border-color: #e5e7eb;
+        }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 1.5rem;
+        }
+        
+        /* Container */
+        .container {
+            max-width: 48rem;
+            width: 100%;
+            background-color: var(--card-bg);
+            border-radius: 1rem;
+            box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+            padding: 2rem;
+            overflow: hidden;
+        }
+
+        /* Typography */
+        h1 { font-size: 1.875rem; font-weight: 800; margin-bottom: 0.5rem; text-align: center; }
+        .subtitle { color: var(--text-muted); font-size: 0.875rem; text-align: center; margin-bottom: 2rem; }
+        .section-label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem; }
+
+        /* File Upload */
+        .upload-area {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 8rem;
+            border: 2px dashed #d1d5db;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            background-color: #f9fafb;
+            transition: background-color 0.2s;
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .upload-area:hover { background-color: #f3f4f6; }
+        .upload-area svg { width: 2rem; height: 2rem; color: #9ca3af; margin-bottom: 0.75rem; }
+        .upload-text { font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.5rem; }
+        .upload-subtext { font-size: 0.75rem; color: var(--text-muted); }
+        .hidden { display: none !important; }
+
+        /* Video Preview */
+        .video-wrapper {
+            background-color: #000;
+            border-radius: 0.5rem;
+            display: flex;
+            justify-content: center;
+            overflow: hidden;
+            margin-bottom: 1.5rem;
+        }
+        video { max-height: 24rem; width: auto; max-width: 100%; }
+
+        /* Controls */
+        .controls-container {
+            background-color: var(--bg-color);
+            padding: 1rem;
+            border-radius: 0.75rem;
+            border: 1px solid var(--border-color);
+            margin-bottom: 1.5rem;
+        }
+        .control-group { margin-bottom: 1rem; }
+        .control-group:last-child { margin-bottom: 0; }
+        .control-header { display: flex; justify-content: space-between; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem; }
+        .time-display { color: var(--primary); font-family: monospace; }
+
+        /* カスタムレンジスライダー */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+            margin-top: 0.5rem;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: var(--primary);
+            cursor: pointer;
+            margin-top: -5px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: #e5e7eb;
+            border-radius: 3px;
+        }
+        input[type=range]:focus { outline: none; }
+
+        /* Button */
+        .btn-primary {
+            display: block;
+            width: 100%;
+            padding: 0.75rem 2rem;
+            background-color: var(--primary);
+            color: white;
+            font-weight: bold;
+            border: none;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: background-color 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.3);
+            font-size: 1rem;
+        }
+        .btn-primary:hover { background-color: var(--primary-hover); }
+        @media (min-width: 640px) { .btn-primary { width: auto; margin: 0 auto; } }
+        .btn-container { text-align: center; }
+
+        /* Status Area */
+        .status-section {
+            margin-top: 1.5rem;
+            background-color: #eff6ff;
+            border: 1px solid #dbeafe;
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            text-align: center;
+        }
+        .status-section.success { background-color: #f0fdf4; border-color: #dcfce3; }
+        .status-section.error { background-color: #fef2f2; border-color: #fee2e2; }
+        
+        .status-text { color: #1e40af; font-weight: 500; margin-bottom: 1rem; }
+        .status-section.success .status-text { color: #15803d; }
+        .status-section.error .status-text { color: #b91c1c; }
+
+        .spinner {
+            display: inline-block;
+            width: 1.5rem;
+            height: 1.5rem;
+            border: 3px solid currentColor;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            color: var(--primary);
+            margin-bottom: 0.75rem;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .btn-download {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.5rem 1.5rem;
+            background-color: #22c55e;
+            color: white;
+            font-weight: 600;
+            border-radius: 0.5rem;
+            text-decoration: none;
+            transition: background-color 0.2s;
+        }
+        .btn-download:hover { background-color: #16a34a; }
+        .btn-download svg { width: 1.25rem; height: 1.25rem; margin-right: 0.5rem; }
+
+        .footer-note {
+            margin-top: 2rem;
+            font-size: 0.75rem;
+            color: #9ca3af;
+            text-align: center;
+        }
+        
+        /* Utils */
+        .opacity-50 { opacity: 0.5; }
+        .pointer-events-none { pointer-events: none; }
+        
+        /* Mode Selector */
+        .mode-selector {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            background: #f3f4f6;
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+        }
+        .mode-label {
+            flex: 1;
+            min-width: 30%;
+            text-align: center;
+            padding: 0.5rem;
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 0.25rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .mode-label:has(input:checked) {
+            border-color: var(--primary);
+            background: #eff6ff;
+            color: var(--primary);
+        }
+        .input-field {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            margin-top: 0.5rem;
+            font-size: 1rem;
+        }
+        .download-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            align-items: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        
+        <!-- ヘッダー -->
+        <div>
+            <h1>WebM 分割ツール</h1>
+        </div>
+
+        <!-- ファイル選択 -->
+        <div>
+            <label class="section-label">1. WebMファイルを選択</label>
+            <label class="upload-area">
+                <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 16">
+                    <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"/>
+                </svg>
+                <p class="upload-text"><span style="font-weight: 600;">クリックしてファイルを選択</span> またはドラッグ＆ドロップ</p>
+                <p class="upload-subtext">.webm 形式のみ対応</p>
+                <input id="file-input" type="file" class="hidden" accept="video/webm" />
+            </label>
+        </div>
+
+        <!-- 動画プレビューとスライダー -->
+        <div id="editor-section" class="hidden">
+            <div class="video-wrapper">
+                <video id="video-preview" controls></video>
+            </div>
+
+            <!-- 時間設定 -->
+            <div class="controls-container">
+                <div class="mode-selector">
+                    <label class="mode-label"><input type="radio" name="mode" value="trim" checked> 範囲切り出し</label>
+                    <label class="mode-label"><input type="radio" name="mode" value="time"> 時間で分割</label>
+                    <label class="mode-label"><input type="radio" name="mode" value="size"> サイズで分割</label>
+                </div>
+
+                <div id="mode-trim-options">
+                    <div class="control-group">
+                        <div class="control-header">
+                            <label>2. 開始時間 (Start)</label>
+                            <span id="start-time-display" class="time-display">00:00.000</span>
+                        </div>
+                        <input id="start-slider" type="range" min="0" max="100" step="0.1" value="0">
+                    </div>
+
+                    <div class="control-group">
+                        <div class="control-header">
+                            <label>3. 終了時間 (End)</label>
+                            <span id="end-time-display" class="time-display">00:00.000</span>
+                        </div>
+                        <input id="end-slider" type="range" min="0" max="100" step="0.1" value="100">
+                    </div>
+                </div>
+
+                <div id="mode-time-options" class="control-group hidden">
+                    <div class="control-header">
+                        <label>2. 分割する間隔（秒）</label>
+                    </div>
+                    <input type="number" id="split-time-input" class="input-field" value="60" min="1">
+                    <p class="upload-subtext" style="margin-top:0.5rem;">例: 60秒ごとに複数のファイルに分割します</p>
+                </div>
+
+                <div id="mode-size-options" class="control-group hidden">
+                    <div class="control-header">
+                        <label>2. 分割する目安サイズ（MB）</label>
+                    </div>
+                    <input type="number" id="split-size-input" class="input-field" value="10" min="1">
+                    <p class="upload-subtext" style="margin-top:0.5rem;">※ 平均ビットレートから分割時間を逆算するため、実際の出力サイズには誤差が生じます。</p>
+                </div>
+            </div>
+
+            <!-- 実行ボタン -->
+            <div class="btn-container">
+                <button id="split-btn" class="btn-primary">
+                    指定した条件で分割して保存
+                </button>
+            </div>
+        </div>
+
+        <!-- 進捗表示・結果エリア -->
+        <div id="status-section" class="status-section hidden">
+            <div id="loading-spinner" class="spinner"></div>
+            <p id="status-text" class="status-text">FFmpegを読み込み中...</p>
+            
+            <div id="download-container" class="download-list hidden">
+                <!-- 動的にダウンロードリンクを生成 -->
+            </div>
+        </div>
+        
+        <p class="footer-note">※ データは無劣化で処理されます。ただしキーフレームの位置により指定時間からわずかにズレる場合があります。</p>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('file-input');
+        const videoPreview = document.getElementById('video-preview');
+        const editorSection = document.getElementById('editor-section');
+        
+        const startSlider = document.getElementById('start-slider');
+        const endSlider = document.getElementById('end-slider');
+        const startTimeDisplay = document.getElementById('start-time-display');
+        const endTimeDisplay = document.getElementById('end-time-display');
+        
+        const modeRadios = document.querySelectorAll('input[name="mode"]');
+        const modeTrimOpts = document.getElementById('mode-trim-options');
+        const modeTimeOpts = document.getElementById('mode-time-options');
+        const modeSizeOpts = document.getElementById('mode-size-options');
+        const splitTimeInput = document.getElementById('split-time-input');
+        const splitSizeInput = document.getElementById('split-size-input');
+        
+        const splitBtn = document.getElementById('split-btn');
+        const statusSection = document.getElementById('status-section');
+        const statusText = document.getElementById('status-text');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const downloadContainer = document.getElementById('download-container');
+
+        let videoDuration = 0;
+        let selectedFile = null;
+
+        // 時間フォーマット関数 (秒 -> MM:SS.mmm)
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            const ms = Math.floor((seconds % 1) * 1000);
+            return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
+        }
+
+        // 1. ファイル選択時の処理
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            selectedFile = file;
+
+            // 動画プレビューのURLを生成
+            const fileURL = URL.createObjectURL(file);
+            videoPreview.src = fileURL;
+
+            // 動画のメタデータが読み込まれたらスライダーを設定
+            videoPreview.onloadedmetadata = () => {
+                videoDuration = videoPreview.duration;
+                
+                startSlider.max = videoDuration;
+                endSlider.max = videoDuration;
+                startSlider.value = 0;
+                endSlider.value = videoDuration;
+                
+                startTimeDisplay.textContent = formatTime(0);
+                endTimeDisplay.textContent = formatTime(videoDuration);
+                
+                editorSection.classList.remove('hidden');
+                statusSection.classList.add('hidden');
+                downloadContainer.classList.add('hidden');
+            };
+        });
+
+        // 2. スライダー操作時の処理
+        startSlider.addEventListener('input', (e) => {
+            let val = parseFloat(e.target.value);
+            let endVal = parseFloat(endSlider.value);
+            
+            // 開始時間が終了時間を超えないようにする
+            if (val >= endVal) {
+                val = endVal - 0.1;
+                startSlider.value = val;
+            }
+            startTimeDisplay.textContent = formatTime(val);
+            videoPreview.currentTime = val; // プレビューをシーク
+        });
+
+        endSlider.addEventListener('input', (e) => {
+            let val = parseFloat(e.target.value);
+            let startVal = parseFloat(startSlider.value);
+            
+            // 終了時間が開始時間を下回らないようにする
+            if (val <= startVal) {
+                val = startVal + 0.1;
+                endSlider.value = val;
+            }
+            endTimeDisplay.textContent = formatTime(val);
+            videoPreview.currentTime = val; // プレビューをシーク
+        });
+
+        // モード切替のUI処理
+        modeRadios.forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                modeTrimOpts.classList.add('hidden');
+                modeTimeOpts.classList.add('hidden');
+                modeSizeOpts.classList.add('hidden');
+                
+                if (e.target.value === 'trim') {
+                    modeTrimOpts.classList.remove('hidden');
+                } else if (e.target.value === 'time') {
+                    modeTimeOpts.classList.remove('hidden');
+                } else if (e.target.value === 'size') {
+                    modeSizeOpts.classList.remove('hidden');
+                }
+            });
+        });
+
+        // 3. 動画分割実行 (FFmpeg.wasm の呼び出し)
+        splitBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            
+            editorSection.classList.add('opacity-50', 'pointer-events-none');
+            statusSection.classList.remove('hidden');
+            loadingSpinner.classList.remove('hidden');
+            downloadContainer.classList.add('hidden');
+            downloadContainer.innerHTML = ''; // クリア
+            
+            // ステータスの色をリセット
+            statusSection.classList.remove('success', 'error');
+            
+            // 古いログを消去
+            document.querySelectorAll('.debug-log').forEach(e => e.remove());
+            
+            const addLog = (msg) => {
+                console.log(msg);
+                const logEl = document.createElement('div');
+                logEl.className = 'debug-log';
+                logEl.style.fontSize = '0.75rem';
+                logEl.style.color = '#6b7280';
+                logEl.style.marginTop = '0.25rem';
+                logEl.textContent = '> ' + msg;
+                statusSection.appendChild(logEl);
+            };
+
+            try {
+                if (!window.FFmpegWASM || !window.FFmpegUtil) {
+                    throw new Error("ライブラリがロードされていません。ページを再読み込みしてください。");
+                }
+
+                const { FFmpeg } = window.FFmpegWASM;
+                const { toBlobURL } = window.FFmpegUtil;
+                const ffmpeg = new FFmpeg();
+
+                // 内部のログをすべて画面に出力する（どこで止まったか確認用）
+                ffmpeg.on('log', ({ message }) => addLog(message));
+                
+                ffmpeg.on('progress', ({ progress }) => {
+                    const percent = Math.max(0, Math.min(100, Math.round(progress * 100)));
+                    statusText.textContent = `処理中... ${percent}%`;
+                });
+
+                // --- リソースの完全ローカル(Blob)化 ---
+                addLog("リソースの取得を開始します (unpkg.com経由)");
+                const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+                const ffmpegURL = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd';
+
+                statusText.textContent = "準備中 (1/3): コアスクリプトを取得中...";
+                addLog("ffmpeg-core.js をダウンロード中...");
+                const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
+
+                statusText.textContent = "準備中 (2/3): WebAssemblyを取得中...";
+                addLog("ffmpeg-core.wasm をダウンロード中...");
+                const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
+
+                statusText.textContent = "準備中 (3/3): Workerスクリプトを取得中...";
+                addLog("814.ffmpeg.js (Worker) をダウンロード中...");
+                const classWorkerURL = await toBlobURL(`${ffmpegURL}/814.ffmpeg.js`, 'text/javascript');
+
+                statusText.textContent = "FFmpegを起動中... (最大1分ほどかかる場合があります)";
+                addLog("全ファイルのBlob変換が完了。ffmpeg.load() を実行します...");
+
+                // タイムアウトを60秒に設定
+                const loadPromise = ffmpeg.load({
+                    coreURL: coreURL,
+                    wasmURL: wasmURL,
+                    classWorkerURL: classWorkerURL
+                });
+                
+                const timeoutPromise = new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error("Workerの起動がタイムアウトしました。ネットワーク接続を確認してください。")), 60000);
+                });
+
+                await Promise.race([loadPromise, timeoutPromise]);
+                addLog("FFmpegの起動に成功しました！");
+
+                statusText.textContent = "動画ファイルを読み込み中...";
+                
+                // ファイルデータを配列として読み込み
+                const fileData = await selectedFile.arrayBuffer();
+                await ffmpeg.writeFile('input.webm', new Uint8Array(fileData));
+
+                statusText.textContent = "動画を分割中...";
+                
+                let ffmpegArgs = [];
+                if (mode === 'trim') {
+                    const startTime = parseFloat(startSlider.value);
+                    const endTime = parseFloat(endSlider.value);
+                    ffmpegArgs = [
+                        '-i', 'input.webm',
+                        '-ss', startTime.toString(),
+                        '-to', endTime.toString(),
+                        '-c', 'copy',
+                        'output.webm'
+                    ];
+                } else {
+                    let segmentTime = 60;
+                    if (mode === 'time') {
+                        segmentTime = parseFloat(splitTimeInput.value);
+                        if (isNaN(segmentTime) || segmentTime <= 0) segmentTime = 60;
+                    } else if (mode === 'size') {
+                        const targetMB = parseFloat(splitSizeInput.value) || 10;
+                        const targetBytes = targetMB * 1024 * 1024;
+                        // 全体サイズと時間から1秒あたりのバイト数を推定し、目標サイズになる秒数を計算
+                        const ratio = targetBytes / selectedFile.size;
+                        segmentTime = videoDuration * ratio;
+                        if (segmentTime <= 0) segmentTime = 1;
+                    }
+                    ffmpegArgs = [
+                        '-i', 'input.webm',
+                        '-f', 'segment',
+                        '-segment_time', segmentTime.toString(),
+                        '-c', 'copy',
+                        '-reset_timestamps', '1',
+                        'output_%03d.webm'
+                    ];
+                }
+
+                // 実行
+                await ffmpeg.exec(ffmpegArgs);
+
+                statusText.textContent = "完了！出力ファイルを生成中...";
+                
+                // 出力ファイルのダウンロードリンク作成関数
+                const createDownloadBtn = (data, filename) => {
+                    const blob = new Blob([data.buffer], { type: 'video/webm' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.className = 'btn-download';
+                    a.innerHTML = `<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg> ${filename}`;
+                    downloadContainer.appendChild(a);
+                };
+
+                if (mode === 'trim') {
+                    const outputData = await ffmpeg.readFile('output.webm');
+                    createDownloadBtn(outputData, 'split_video.webm');
+                } else {
+                    // output_000.webm から順番に読み取る
+                    let index = 0;
+                    while (true) {
+                        const filename = `output_${index.toString().padStart(3, '0')}.webm`;
+                        try {
+                            const outputData = await ffmpeg.readFile(filename);
+                            createDownloadBtn(outputData, filename);
+                            index++;
+                        } catch (e) {
+                            // ファイルが見つからなくなったらループ終了
+                            break;
+                        }
+                    }
+                    if (index === 0) throw new Error("出力ファイルが生成されませんでした。");
+                }
+                
+                loadingSpinner.classList.add('hidden');
+                statusText.textContent = "分割が完了しました。";
+                statusSection.classList.add('success');
+                
+                downloadContainer.classList.remove('hidden');
+
+            } catch (error) {
+                console.error("FFmpeg Error:", error);
+                loadingSpinner.classList.add('hidden');
+                // エラー内容をそのままUIに表示
+                statusText.textContent = `エラー: ${error.message || '予期せぬエラーが発生しました'}`;
+                statusSection.classList.add('error');
+            } finally {
+                editorSection.classList.remove('opacity-50', 'pointer-events-none');
+            }
+        });
+    </script>
+</body>
+</html>
